@@ -97,5 +97,5 @@ Assure-toi que tu as bien configuré l'adresse IP du contrôleur et que tous les
 
 ## À propos 🦊
 
-Ce projet a été développé par **Fox** 🦊 (oui, c’est moi). J'ai décidé de combiner mon amour pour les réseaux, la cybersécurité et le Machine Learning pour créer quelque chose d’unique. Si tu as aimé ce projet, n’hésite pas à me le dire (ou même à m’envoyer des memes de renard). Et si tu veux contribuer, tu sais où me trouver.
+Ce projet a été développé par une equipe d'etudiants de polytechnique Yaounde En M1-GI et ... **Fox** 🦊 (oui, c’est moi). on a décidé de combiner notre amour pour les réseaux, la cybersécurité et le Machine Learning pour créer quelque chose d’unique. Si tu as aimé ce projet, n’hésite pas à me le dire (ou même à m’envoyer des memes de renard). Et si tu veux contribuer, tu sais où me trouver.
 
