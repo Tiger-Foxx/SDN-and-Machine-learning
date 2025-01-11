@@ -19,21 +19,16 @@ class SimpleMonitor13(switch.SimpleSwitch13):
 
 
    def __init__(self, *args, **kwargs):
+        super(SimpleMonitor13, self).__init__(*args, **kwargs)
+        self.datapaths = {}
+        self.monitor_thread = hub.spawn(self._monitor)
+        self.blocking_thread = None
+        self.attackers = set()  # List of attackers detected
 
-
-       super(SimpleMonitor13, self).__init__(*args, **kwargs)
-       self.datapaths = {}
-       self.monitor_thread = hub.spawn(self._monitor)
-
-
-       start = datetime.now()
-
-
-       self.flow_training()
-
-
-       end = datetime.now()
-       print("Training time: ", (end-start))
+        start = datetime.now()
+        self.flow_training()
+        end = datetime.now()
+        print("Training time: ", (end-start))
 
 
    @set_ev_cls(ofp_event.EventOFPStateChange,
@@ -157,55 +152,88 @@ class SimpleMonitor13(switch.SimpleSwitch13):
        self.logger.info("Model is now loaded and ready to use.")
        self.logger.info("------------------------------------------------------------------------------")
 
-
    def flow_predict(self):
-       try:
-           predict_flow_dataset = pd.read_csv('PredictFlowStatsfile.csv')
+    try:
+        # Charger les données de prédiction
+        predict_flow_dataset = pd.read_csv('PredictFlowStatsfile.csv')
 
+        # Nettoyer les colonnes spécifiques pour retirer les caractères indésirables
+        predict_flow_dataset.iloc[:, 2] = predict_flow_dataset.iloc[:, 2].str.replace('.', '')
+        predict_flow_dataset.iloc[:, 3] = predict_flow_dataset.iloc[:, 3].str.replace('.', '')
+        predict_flow_dataset.iloc[:, 5] = predict_flow_dataset.iloc[:, 5].str.replace('.', '')
 
-           predict_flow_dataset.iloc[:, 2] = predict_flow_dataset.iloc[:, 2].str.replace('.', '')
-           predict_flow_dataset.iloc[:, 3] = predict_flow_dataset.iloc[:, 3].str.replace('.', '')
-           predict_flow_dataset.iloc[:, 5] = predict_flow_dataset.iloc[:, 5].str.replace('.', '')
+        # Préparer les données pour la prédiction
+        X_predict_flow = predict_flow_dataset.iloc[:, :].values
+        X_predict_flow = X_predict_flow.astype('float64')
 
+        # Effectuer la prédiction
+        y_flow_pred = self.flow_model.predict(X_predict_flow)
 
-           X_predict_flow = predict_flow_dataset.iloc[:, :].values
-           X_predict_flow = X_predict_flow.astype('float64')
-          
-           y_flow_pred = self.flow_model.predict(X_predict_flow)
+        # Initialiser les compteurs
+        legitimate_trafic = 0
+        ddos_trafic = 0
+        victim = None
+        self.attackers = []  # Réinitialiser la liste des attaquants
 
+        # Analyser les résultats des prédictions
+        for idx, prediction in enumerate(y_flow_pred):
+            if prediction == 0:
+                legitimate_trafic += 1
+            else:
+                ddos_trafic += 1
 
-           legitimate_trafic = 0
-           ddos_trafic = 0
+                # Identifier l'attaquant et la victime
+                attacker_ip = predict_flow_dataset.iloc[idx, 3]  # IP source de l'attaque
+                victim_ip = predict_flow_dataset.iloc[idx, 5]  # IP destination de l'attaque
+                self.attackers.append(attacker_ip)
 
+                # Calculer l'hôte victime
+                victim = int(victim_ip) % 20  # Remplace cette logique si elle ne s'applique pas
 
-           for i in y_flow_pred:
-               if i == 0:
-                   legitimate_trafic = legitimate_trafic + 1
-               else:
-                   ddos_trafic = ddos_trafic + 1
-                   victim = int(predict_flow_dataset.iloc[i, 5])%20
-                  
-                  
-                  
+        # Afficher les statistiques de trafic
+        self.logger.info("------------------------------------------------------------------------------")
+        traffic_legitimacy = (legitimate_trafic / len(y_flow_pred)) * 100
 
+        if traffic_legitimacy > 80:
+            self.logger.info(f"Legitimate traffic detected: {traffic_legitimacy:.2f}%")
+        else:
+            self.logger.info(f"DDoS traffic detected: {100 - traffic_legitimacy:.2f}%")
+            if victim is not None:
+                self.logger.info(f"Victim is host: h{victim}")
+            if self.attackers:
+                self.logger.info(f"Attackers identified: {', '.join(self.attackers)}")
 
-           self.logger.info("------------------------------------------------------------------------------")
-           if (legitimate_trafic/len(y_flow_pred)*100) > 80:
-               self.logger.info("legitimate trafic ...")
-           else:
-               self.logger.info("ddos trafic ...")
-               self.logger.info("victim is host: h{}".format(victim))
+        self.logger.info("------------------------------------------------------------------------------")
 
+        # Appliquer les règles de blocage pour les attaquants
+        if self.attackers:
+            self.logger.info("Initiating blocking rules for detected attackers...")
+            self._apply_blocking_rules()
 
-           self.logger.info("------------------------------------------------------------------------------")
-          
-           file0 = open("PredictFlowStatsfile.csv","w")
-          
-           file0.write('timestamp,datapath_id,flow_id,ip_src,tp_src,ip_dst,tp_dst,ip_proto,icmp_code,icmp_type,flow_duration_sec,flow_duration_nsec,idle_timeout,hard_timeout,flags,packet_count,byte_count,packet_count_per_second,packet_count_per_nsecond,byte_count_per_second,byte_count_per_nsecond\n')
-           file0.close()
+        # Réinitialiser le fichier de prédiction
+        with open("PredictFlowStatsfile.csv", "w") as file0:
+            file0.write(
+                'timestamp,datapath_id,flow_id,ip_src,tp_src,ip_dst,tp_dst,ip_proto,icmp_code,icmp_type,flow_duration_sec,flow_duration_nsec,idle_timeout,hard_timeout,flags,packet_count,byte_count,packet_count_per_second,packet_count_per_nsecond,byte_count_per_second,byte_count_per_nsecond\n'
+            )
+    except Exception as e:
+        self.logger.error(f"Error during flow prediction: {e}")
 
+   def _apply_blocking_rules(self):
+        self.logger.info("Starting periodic blocking rules for attackers...")
+        for datapath in self.datapaths.values():
+            parser = datapath.ofproto_parser
+            ofproto = datapath.ofproto
 
-       except:
-           pass
+            while self.attackers:
+                for attacker_ip in self.attackers:
+                    match = parser.OFPMatch(ipv4_src=attacker_ip, eth_type=0x0800)
+                    actions = []  # Drop packet
+                    inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+                    mod = parser.OFPFlowMod(datapath=datapath, priority=100, match=match, instructions=inst, idle_timeout=3, hard_timeout=3)
+                    datapath.send_msg(mod)
+                    self.logger.info(f"Blocking traffic from {attacker_ip}")
+                hub.sleep(5)  # Wait 5 seconds before next block cycle
+
+            self.logger.info("Finished applying blocking rules.")
 
 
